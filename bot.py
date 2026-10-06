@@ -94,7 +94,7 @@ GRUPOS = [
     ("convocatorias", "🆕 <b>Convocatorias nuevas</b>", 230),
     ("ofertas", "📊 <b>Ofertas de empleo público</b>", 230),
     ("bolsas", "🗂 <b>Bolsas y listas de espera</b>", 230),
-    ("seguimiento", "🔎 <b>Seguimiento de procesos</b>", 150),
+    ("seguimiento", "🔎 <b>Seguimiento de procesos</b>", 230),
 ]
 
 
