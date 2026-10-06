@@ -73,6 +73,15 @@ declaraciones sin novedad, y deporte (salvo un hito excepcional).
 
 Que una noticia salga en muchos medios es una buena señal de importancia, pero no la única.
 No repitas el mismo hecho dos veces.
+Da prioridad a lo que afecta a toda la región frente a lo que solo afecta a una ciudad, y \
+procura que no haya más de tres noticias de una misma localidad.
+Los avisos vigentes de meteorología adversa, incendios o cortes de carreteras van siempre \
+entre las primeras.
+
+Estilo: español de España, registro periodístico sobrio. Usa el pretérito perfecto para hechos \
+recientes ("ha aprobado", no "aprobó"). No exageres: el titular no puede decir más de lo que \
+dicen los titulares originales (una filtración de agua no es una inundación). Titular y \
+contexto deben referirse al mismo hecho.
 
 Para cada noticia elegida escribe:
 - "titular": un titular claro y neutro, de 12 palabras como máximo.
