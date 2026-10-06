@@ -275,7 +275,12 @@ def prioridad(ev):
     return min(mejores) if mejores else len(DESTACADAS)
 
 
+RE_ANULADO = re.compile(r"cancelad|aplazad|suspendid|anulad")
+
+
 def admitido(ev):
+    if RE_ANULADO.search(norm(ev["titulo"])):
+        return False
     cats = {norm(c) for c in ev["categorias"]}
     return not cats or bool(cats - EXCLUIDAS)
 
@@ -284,14 +289,19 @@ def fecha_corta(f):
     return f"{DIAS_CORTO[f.weekday()]} {f.day}"
 
 
-def linea(ev, con_mes=False):
-    cuando = fecha_corta(ev["inicio"])
-    if con_mes:
-        cuando += f" {MES_ABREV[ev['inicio'].month - 1]}"
-    if ev["fin"] > ev["inicio"]:
-        cuando += f"–{ev['fin'].day} {MES_ABREV[ev['fin'].month - 1]}"
-    elif ev["hora"]:
-        cuando += f", {ev['hora']}"
+def linea(ev, hoy, con_mes=False):
+    inicio, fin = ev["inicio"], ev["fin"]
+    mes_ini, mes_fin = MES_ABREV[inicio.month - 1], MES_ABREV[fin.month - 1]
+    if fin > inicio and inicio < hoy:            # ya empezó: importa cuándo acaba
+        cuando = f"hasta el {fecha_corta(fin)} {mes_fin}"
+    elif fin > inicio and inicio.month != fin.month:
+        cuando = f"{fecha_corta(inicio)} {mes_ini}–{fin.day} {mes_fin}"
+    elif fin > inicio:
+        cuando = f"{fecha_corta(inicio)}–{fin.day} {mes_fin}"
+    else:
+        cuando = fecha_corta(inicio) + (f" {mes_ini}" if con_mes else "")
+        if ev["hora"]:
+            cuando += f", {ev['hora']}"
     titulo = ev["titulo"] if len(ev["titulo"]) <= 90 else ev["titulo"][:88].rstrip() + "…"
     cats = [c for c in ev["categorias"] if norm(c) not in EXCLUIDAS][:2]
     etiqueta = f" <i>({html.escape(', '.join(cats))})</i>" if cats else ""
@@ -332,11 +342,11 @@ def componer(eventos, hoy, citas):
 
     for clave, nombre in (("badajoz", "Badajoz"), ("caceres", "Cáceres"), ("", "Otras zonas")):
         suyos = sorted((e for e in finde if e["provincia"] == clave),
-                       key=lambda e: (prioridad(e), e["inicio"], e["hora"] or "99"))
+                       key=lambda e: (prioridad(e), max(e["inicio"], hoy), e["hora"] or "99"))
         if not suyos:
             continue
         lineas.append(f"\n📍 <b>{nombre}</b> ({len(suyos)})")
-        lineas += [linea(e) for e in suyos[:MAX_POR_PROVINCIA]]
+        lineas += [linea(e, hoy) for e in suyos[:MAX_POR_PROVINCIA]]
         if len(suyos) > MAX_POR_PROVINCIA:
             lineas.append(f"   … y {len(suyos) - MAX_POR_PROVINCIA} más en "
                           f"<a href=\"{AGENDA}\">la agenda completa</a>")
@@ -344,7 +354,7 @@ def componer(eventos, hoy, citas):
     if luego:
         luego.sort(key=lambda e: (e["inicio"], prioridad(e)))
         lineas.append("\n🗓 <b>Más adelante</b> (ferias, fiestas, gastronomía y turismo)")
-        lineas += [linea(e, con_mes=True) for e in luego[:MAX_MAS_ADELANTE]]
+        lineas += [linea(e, hoy, con_mes=True) for e in luego[:MAX_MAS_ADELANTE]]
 
     if len(lineas) == 1:
         return None
