@@ -1,0 +1,37 @@
+name: Empleo público Extremadura
+ 
+on:
+  schedule:
+    # Horas en UTC. De lunes a sábado: tres pasadas por la mañana.
+    # Las repeticiones no duplican avisos: el bot recuerda lo ya enviado.
+    - cron: "15 6,9,12 * * 1-6"
+  workflow_dispatch:
+ 
+permissions:
+  contents: write
+ 
+concurrency:
+  group: empleo
+  cancel-in-progress: false
+ 
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Ejecutar bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # En ejecuciones manuales avisa aunque no haya novedades.
+          AVISAR_SI_VACIO: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+        run: python3 bot.py
+ 
+      - name: Guardar lo ya enviado
+        run: |
+          git config user.name "bot-extremadura"
+          git config user.email "bot-extremadura@users.noreply.github.com"
+          git add estado.json 2>/dev/null || exit 0
+          git diff --cached --quiet || (git commit -m "Actualizar estado" && git push)
+ 
