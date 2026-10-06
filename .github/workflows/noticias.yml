@@ -1,0 +1,37 @@
+name: Noticias Extremadura
+
+on:
+  schedule:
+    # Horas en UTC: 8:30 y 21:30 en horario de verano, 7:30 y 20:30 en invierno.
+    - cron: "30 6,19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: noticias
+  cancel-in-progress: false
+
+jobs:
+  resumen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enviar resumen
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python3 noticias.py
+
+      - name: Guardar lo ya contado
+        run: |
+          git config user.name "bot-extremadura"
+          git config user.email "bot-extremadura@users.noreply.github.com"
+          git add noticias_estado.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Actualizar noticias enviadas"
+          git pull --rebase
+          git push
