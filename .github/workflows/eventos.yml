@@ -1,0 +1,36 @@
+name: Eventos Extremadura
+
+on:
+  schedule:
+    # Jueves a las 16:00 UTC: 18:00 en horario de verano, 17:00 en invierno.
+    - cron: "0 16 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: eventos
+  cancel-in-progress: false
+
+jobs:
+  agenda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enviar agenda
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 eventos.py
+
+      - name: Guardar avisos ya enviados
+        run: |
+          git config user.name "bot-extremadura"
+          git config user.email "bot-extremadura@users.noreply.github.com"
+          git add eventos_estado.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Actualizar avisos de eventos"
+          git pull --rebase
+          git push
