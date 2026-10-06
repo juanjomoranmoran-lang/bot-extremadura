@@ -248,6 +248,39 @@ def enviar(texto):
         raise RuntimeError(f"Telegram respondió {e.code}: {e.read().decode(errors='replace')}")
 
 
+def prefijo_comun(textos):
+    p = os.path.commonprefix(textos)
+    return p[:p.rfind(" ") + 1] if " " in p else ""
+
+
+def sufijo_comun(textos):
+    s = os.path.commonprefix([t[::-1] for t in textos])[::-1]
+    return s[s.find(" "):] if " " in s else ""
+
+
+def enlace(i):
+    return f"<a href=\"{html.escape(i['url'], quote=True)}\">{i['fuente']}</a>"
+
+
+def lineas_organismo(organismo, grupo, limite):
+    """Líneas de un organismo. Si publica 3 o más anuncios casi iguales,
+    muestra la parte común una vez y debajo solo lo que cambia."""
+    titulos = [i["titulo"] for i in grupo]
+    if len(grupo) >= 3:
+        pre, suf = prefijo_comun(titulos), sufijo_comun(titulos)
+        if len(pre) >= 25 and len(pre) + len(suf) < min(map(len, titulos)):
+            medios = [t[len(pre):len(t) - len(suf)].strip(" ,.;:") for t in titulos]
+            if all(medios):
+                comun = pre.strip() + " …" + (" " + suf.strip(" ,") if suf.strip(" ,.") else "")
+                salida = [f"• <b>{html.escape(organismo)}</b> ({len(grupo)}): "
+                          f"{html.escape(recortar(comun, limite + 60))}"]
+                for i, medio in zip(grupo, medios):
+                    salida.append(f"   – {html.escape(recortar(medio, 110))} {enlace(i)}")
+                return salida
+    return [f"• <b>{html.escape(organismo)}</b>: "
+            f"{html.escape(recortar(i['titulo'], limite))} {enlace(i)}" for i in grupo]
+
+
 def componer(items, hoy):
     fecha = f"{DIAS[hoy.weekday()]} {hoy.day} de {MESES[hoy.month - 1]}"
     lineas = [f"📋 <b>Empleo público · Extremadura</b>\n{fecha} · {len(items)} novedades"]
@@ -256,12 +289,11 @@ def componer(items, hoy):
         if not grupo:
             continue
         lineas.append(f"\n{cabecera} ({len(grupo)})")
+        por_organismo = {}
         for i in grupo:
-            lineas.append(
-                f"• <b>{html.escape(i['organismo'])}</b>: "
-                f"{html.escape(recortar(i['titulo'], limite))} "
-                f"<a href=\"{html.escape(i['url'], quote=True)}\">{i['fuente']}</a>"
-            )
+            por_organismo.setdefault(i["organismo"], []).append(i)
+        for organismo, suyos in por_organismo.items():
+            lineas += lineas_organismo(organismo, suyos, limite)
     return lineas
 
 
