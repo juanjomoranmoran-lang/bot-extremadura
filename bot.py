@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Bot de empleo público de Extremadura.
 
-Lee el sumario del DOE (RSS oficial) y el del BOE (API de datos abiertos),
-se queda con lo relativo a empleo público en Extremadura, lo clasifica y
-lo envía a Telegram. No usa IA ni librerías externas.
+Lee el sumario del DOE (RSS oficial), el del BOE (API de datos abiertos) y
+la categoría de empleo público del BOP de Cáceres, se queda con lo relativo
+a empleo público en Extremadura, lo clasifica y lo envía a Telegram.
+No usa IA ni librerías externas.
 """
 import html
 import json
@@ -15,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,10 @@ UA = "Mozilla/5.0 (compatible; bot-extremadura/1.0)"
 
 DOE_RSS = "https://doe.juntaex.es/rss/rss.php?seccion=6"
 BOE_API = "https://www.boe.es/datosabiertos/api/boe/sumario/{fecha}"
+BOP_CC = "https://bop.dip-caceres.es/bop/"
+BOP_CC_API = BOP_CC + "services/anuncios/anunciosTipoContenido"
+BOP_CC_TIPOS = "_17_34"   # 17 = oferta pública de empleo, 34 = oposiciones y concursos
+BOP_CC_DIAS = 4           # días hacia atrás que se consultan en cada pasada
 
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
@@ -56,7 +61,7 @@ def descargar(url, accept=None):
 RE_EXTREMADURA = re.compile(r"extremadura|extremen|badajoz|caceres")
 
 RE_EMPLEO = re.compile(
-    r"procesos? selectivos?|pruebas? selectivas?|oferta de empleo publico"
+    r"procesos? selectivos?|pruebas? selectivas?|ofertas? de empleo publico"
     r"|personal (funcionario|laboral|estatutario|docente)|funcionari"
     r"|bolsas? de (trabajo|empleo)|listas? de espera"
     r"|concurso[- ]oposicion|oposicion(es)?\b|concurso de (meritos|traslados?)"
@@ -75,9 +80,11 @@ RE_SEGUIMIENTO = re.compile(
     r"|(relacion|lista|listado)s? (provisional|definitiv)"
     r"|fechas? (de|y|,)|lugar|ejercicio de la fase|realizacion del"
     r"|resuelve|declara desiert|cese|emplaza|recurso|sentencia|jubilacion"
+    r"|resolucion definitiva|aprobacion definitiva|contratacion|seleccionad"
+    r"|baremacion|examen|asesor"
 )
 RE_BOLSA = re.compile(r"bolsas? de (trabajo|empleo)|listas? de espera")
-RE_OFERTA = re.compile(r"oferta de empleo publico")
+RE_OFERTA = re.compile(r"ofertas? de empleo")
 RE_CONVOCATORIA = re.compile(
     r"convoca|bases|pruebas? selectivas?|proveer|provision|libre designacion"
     r"|concurso"
@@ -231,6 +238,39 @@ def leer_boe(fecha):
     return items
 
 
+# ------------------------------------------------------------ BOP de Cáceres
+
+RE_CSV = re.compile(r"^BOP-\d{4}-\d+\s*")
+
+
+def leer_bop_caceres(hoy):
+    """El BOP de Cáceres ya clasifica sus anuncios; pedimos solo empleo público."""
+    desde = hoy - timedelta(days=BOP_CC_DIAS)
+    consulta = urllib.parse.urlencode({
+        "tipos": BOP_CC_TIPOS,
+        "desde": desde.strftime("%m/%d/%Y"),   # el servicio usa mes/día/año
+        "hasta": hoy.strftime("%m/%d/%Y"),
+        "start": 0,
+        "limit": 100,
+    })
+    datos = json.loads(descargar(f"{BOP_CC_API}?{consulta}", accept="application/json"))
+    items = []
+    for a in datos.get("data") or []:
+        csv = (a.get("csv") or "").strip()
+        titulo = RE_CSV.sub("", " ".join((a.get("tituloAnuncio") or "").split()))
+        if not csv or not titulo:
+            continue
+        items.append({
+            "id": csv,
+            "fuente": "BOP Cáceres",
+            "organismo": (a.get("nombreEntidad") or "BOP Cáceres").strip(),
+            "titulo": titulo[0].upper() + titulo[1:],
+            "url": f"{BOP_CC}anuncio.html?csv={urllib.parse.quote(csv)}",
+            "grupo": clasificar(titulo),
+        })
+    return items
+
+
 # ------------------------------------------------------------------ Telegram
 
 def enviar(texto):
@@ -324,8 +364,12 @@ def main():
     ya = set(vistos)
 
     items, errores = [], []
-    for nombre, lector in (("DOE", leer_doe),
-                           ("BOE", lambda: leer_boe(hoy.strftime("%Y%m%d")))):
+    fuentes = (
+        ("DOE", leer_doe),
+        ("BOE", lambda: leer_boe(hoy.strftime("%Y%m%d"))),
+        ("BOP Cáceres", lambda: leer_bop_caceres(hoy)),
+    )
+    for nombre, lector in fuentes:
         try:
             encontrados = lector()
             print(f"{nombre}: {len(encontrados)} anuncios de empleo público")
@@ -355,7 +399,7 @@ def main():
             aviso += f"\n⚠️ No se pudo leer: {', '.join(errores)}."
         enviar(aviso)
 
-    if len(errores) == 2:
+    if len(errores) == len(fuentes):
         sys.exit("No se pudo leer ninguna fuente")
 
 
