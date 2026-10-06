@@ -43,7 +43,7 @@ BUSQUEDAS = [
 GNEWS = "https://news.google.com/rss/search?q={q}&hl=es&gl=ES&ceid=ES:es"
 
 HORAS_VENTANA = 14      # antigüedad máxima de un titular
-CANDIDATAS = 45         # noticias que se le pasan a la IA
+CANDIDATAS = 35         # noticias que se le pasan a la IA
 MAX_NOTICIAS = 8        # noticias en el resumen
 SIMILITUD = 0.5         # umbral para considerar que dos titulares son la misma noticia
 
@@ -199,47 +199,86 @@ def medios(grupo):
 
 # ------------------------------------------------------------------------ IA
 
+NO_SIRVEN = ("whisper", "tts", "guard", "embed", "orpheus", "playai", "distil", "compound")
+
+
 def modelos_a_probar():
-    """Modelos de Groq a intentar, por orden de preferencia."""
+    """Modelos de Groq a intentar: primero los preferidos, luego el resto de los de texto."""
     if GROQ_MODEL:
         return [GROQ_MODEL]
     try:
         datos = json.loads(descargar("https://api.groq.com/openai/v1/models",
                                      cabeceras={"Authorization": f"Bearer {GROQ_KEY}"}))
-        disponibles = {m["id"] for m in datos.get("data", [])}
+        disponibles = [m["id"] for m in datos.get("data", []) if m.get("active", True)]
+        print("Modelos disponibles en Groq: " + ", ".join(sorted(disponibles)))
         elegidos = [m for m in MODELOS_PREFERIDOS if m in disponibles]
+        elegidos += [m for m in sorted(disponibles)
+                     if m not in elegidos and not any(x in m.lower() for x in NO_SIRVEN)]
         if elegidos:
-            return elegidos
+            return elegidos[:4]
     except Exception as e:
         print(f"No se pudo consultar la lista de modelos: {e!r}")
     return MODELOS_PREFERIDOS[:2]
 
 
-def extraer_json(texto):
-    """Saca el objeto JSON de la respuesta aunque venga con texto alrededor."""
+def extraer_noticias(texto):
+    """Saca la lista de noticias de la respuesta. Si el JSON llega cortado o con
+    texto alrededor, rescata los objetos que estén completos."""
     inicio, fin = texto.find("{"), texto.rfind("}")
-    if inicio < 0 or fin <= inicio:
-        raise ValueError("la respuesta no contiene JSON")
-    return json.loads(texto[inicio:fin + 1])
+    if inicio >= 0 and fin > inicio:
+        try:
+            contenido = json.loads(texto[inicio:fin + 1])
+            if isinstance(contenido.get("noticias"), list):
+                return contenido["noticias"]
+        except (ValueError, AttributeError):
+            pass
+    rescatadas = []
+    for trozo in re.findall(r"\{[^{}]*\}", texto):
+        try:
+            objeto = json.loads(trozo)
+        except ValueError:
+            continue
+        if isinstance(objeto, dict) and "n" in objeto:
+            rescatadas.append(objeto)
+    if not rescatadas:
+        raise ValueError("la respuesta no contiene noticias legibles")
+    return rescatadas
 
 
 def preguntar(modelo, lista):
-    cuerpo = json.dumps({
+    base = {
         "model": modelo,
         "temperature": 0.2,
         "messages": [
             {"role": "system", "content": INSTRUCCIONES},
             {"role": "user", "content": lista},
         ],
-    }).encode()
-    respuesta = json.loads(descargar(
-        "https://api.groq.com/openai/v1/chat/completions", datos=cuerpo,
-        cabeceras={"Authorization": f"Bearer {GROQ_KEY}",
-                   "Content-Type": "application/json"}))
-    contenido = extraer_json(respuesta["choices"][0]["message"]["content"] or "")
-    if not isinstance(contenido.get("noticias"), list):
-        raise ValueError("falta la lista 'noticias'")
-    return contenido["noticias"]
+    }
+    # Los modelos que "razonan" gastan parte de la respuesta en pensar: se les da
+    # margen de sobra y se les pide poco razonamiento. Si Groq rechaza algún
+    # parámetro (error 400), se prueba con menos.
+    variantes = [{"max_completion_tokens": 6000}, {}]
+    if "gpt-oss" in modelo or "qwen" in modelo or "deepseek" in modelo:
+        variantes.insert(0, {"max_completion_tokens": 6000, "reasoning_effort": "low"})
+    ultimo = None
+    for extra in variantes:
+        try:
+            respuesta = json.loads(descargar(
+                "https://api.groq.com/openai/v1/chat/completions",
+                datos=json.dumps({**base, **extra}).encode(),
+                cabeceras={"Authorization": f"Bearer {GROQ_KEY}",
+                           "Content-Type": "application/json"}))
+        except urllib.error.HTTPError as e:
+            ultimo = RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+            if e.code == 400:
+                continue
+            raise ultimo
+        eleccion = respuesta["choices"][0]
+        texto = eleccion["message"].get("content") or ""
+        if not texto.strip():
+            raise ValueError(f"respuesta vacía (motivo: {eleccion.get('finish_reason')})")
+        return extraer_noticias(texto)
+    raise ultimo
 
 
 def seleccionar_con_ia(grupos):
@@ -249,7 +288,7 @@ def seleccionar_con_ia(grupos):
         for t in sorted(g, key=lambda x: -len(x["titulo"])):
             if t["titulo"] not in distintos:
                 distintos.append(t["titulo"])
-        lineas.append(f"[{n}] ({medios(g)} medios) " + " | ".join(distintos[:3]))
+        lineas.append(f"[{n}] ({medios(g)} medios) " + " | ".join(distintos[:2]))
     lista = "\n".join(lineas)
 
     noticias = None
@@ -260,10 +299,7 @@ def seleccionar_con_ia(grupos):
                 print(f"Modelo de Groq: {modelo} (intento {intento})")
                 break
             except Exception as e:
-                detalle = ""
-                if isinstance(e, urllib.error.HTTPError):
-                    detalle = e.read().decode(errors="replace")[:300]
-                print(f"Fallo con {modelo}, intento {intento}: {e!r} {detalle}")
+                print(f"Fallo con {modelo}, intento {intento}: {e!r}")
         if noticias is not None:
             break
     if noticias is None:
