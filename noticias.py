@@ -199,19 +199,47 @@ def medios(grupo):
 
 # ------------------------------------------------------------------------ IA
 
-def elegir_modelo():
+def modelos_a_probar():
+    """Modelos de Groq a intentar, por orden de preferencia."""
     if GROQ_MODEL:
-        return GROQ_MODEL
+        return [GROQ_MODEL]
     try:
         datos = json.loads(descargar("https://api.groq.com/openai/v1/models",
                                      cabeceras={"Authorization": f"Bearer {GROQ_KEY}"}))
         disponibles = {m["id"] for m in datos.get("data", [])}
-        for m in MODELOS_PREFERIDOS:
-            if m in disponibles:
-                return m
+        elegidos = [m for m in MODELOS_PREFERIDOS if m in disponibles]
+        if elegidos:
+            return elegidos
     except Exception as e:
         print(f"No se pudo consultar la lista de modelos: {e!r}")
-    return MODELOS_PREFERIDOS[0]
+    return MODELOS_PREFERIDOS[:2]
+
+
+def extraer_json(texto):
+    """Saca el objeto JSON de la respuesta aunque venga con texto alrededor."""
+    inicio, fin = texto.find("{"), texto.rfind("}")
+    if inicio < 0 or fin <= inicio:
+        raise ValueError("la respuesta no contiene JSON")
+    return json.loads(texto[inicio:fin + 1])
+
+
+def preguntar(modelo, lista):
+    cuerpo = json.dumps({
+        "model": modelo,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": INSTRUCCIONES},
+            {"role": "user", "content": lista},
+        ],
+    }).encode()
+    respuesta = json.loads(descargar(
+        "https://api.groq.com/openai/v1/chat/completions", datos=cuerpo,
+        cabeceras={"Authorization": f"Bearer {GROQ_KEY}",
+                   "Content-Type": "application/json"}))
+    contenido = extraer_json(respuesta["choices"][0]["message"]["content"] or "")
+    if not isinstance(contenido.get("noticias"), list):
+        raise ValueError("falta la lista 'noticias'")
+    return contenido["noticias"]
 
 
 def seleccionar_con_ia(grupos):
@@ -222,24 +250,27 @@ def seleccionar_con_ia(grupos):
             if t["titulo"] not in distintos:
                 distintos.append(t["titulo"])
         lineas.append(f"[{n}] ({medios(g)} medios) " + " | ".join(distintos[:3]))
-    modelo = elegir_modelo()
-    print(f"Modelo de Groq: {modelo}")
-    cuerpo = json.dumps({
-        "model": modelo,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": INSTRUCCIONES},
-            {"role": "user", "content": "\n".join(lineas)},
-        ],
-    }).encode()
-    respuesta = json.loads(descargar(
-        "https://api.groq.com/openai/v1/chat/completions", datos=cuerpo,
-        cabeceras={"Authorization": f"Bearer {GROQ_KEY}",
-                   "Content-Type": "application/json"}))
-    contenido = json.loads(respuesta["choices"][0]["message"]["content"])
+    lista = "\n".join(lineas)
+
+    noticias = None
+    for modelo in modelos_a_probar():
+        for intento in (1, 2):
+            try:
+                noticias = preguntar(modelo, lista)
+                print(f"Modelo de Groq: {modelo} (intento {intento})")
+                break
+            except Exception as e:
+                detalle = ""
+                if isinstance(e, urllib.error.HTTPError):
+                    detalle = e.read().decode(errors="replace")[:300]
+                print(f"Fallo con {modelo}, intento {intento}: {e!r} {detalle}")
+        if noticias is not None:
+            break
+    if noticias is None:
+        raise RuntimeError("Ningún modelo de Groq ha dado una respuesta válida")
+
     elegidas, usados = [], set()
-    for x in contenido.get("noticias", []):
+    for x in noticias:
         try:
             n = int(x["n"])
         except (KeyError, TypeError, ValueError):
@@ -252,8 +283,6 @@ def seleccionar_con_ia(grupos):
             "titular": str(x.get("titular") or "").strip(),
             "contexto": str(x.get("contexto") or "").strip(),
         })
-    if not isinstance(contenido.get("noticias"), list):
-        raise RuntimeError("Respuesta de la IA con formato inesperado")
     return elegidas[:MAX_NOTICIAS]
 
 
@@ -321,8 +350,7 @@ def main():
             elegidas = seleccionar_con_ia(grupos)
             con_ia = True
         except Exception as e:
-            detalle = e.read().decode(errors="replace") if isinstance(e, urllib.error.HTTPError) else ""
-            print(f"ERROR de Groq: {e!r} {detalle}")
+            print(f"ERROR de Groq: {e!r}")
     else:
         print("No hay GROQ_API_KEY: se envía sin IA.")
     if elegidas is None:
